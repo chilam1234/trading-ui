@@ -1,0 +1,194 @@
+:root {
+  --text: #9ca3af;
+  --text-h: #f3f4f6;
+  --muted: #6b7280;
+  --bg: #0c0d10;
+  --panel: #12141a;
+  --panel-head: #1a1d26;
+  --border: #2e303a;
+  --accent: #06b6d4;
+  --buy: #34d399;
+  --sell: #f87171;
+  --warn: #fbbf24;
+
+  /* Pulse strip (liquidity rail) */
+  --pulse-rail-h: 6px;
+  --pulse-rail-track: color-mix(in srgb, var(--border) 85%, transparent);
+  --pulse-rail-buy: var(--buy);
+  --pulse-rail-sell: var(--sell);
+  --pulse-rail-neutral: var(--muted);
+  --pulse-strip-bg: color-mix(in srgb, var(--panel) 88%, transparent);
+  --pulse-strip-border: color-mix(in srgb, var(--accent) 18%, var(--border));
+
+  --sans: 'IBM Plex Sans', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  font: 15px/145% var(--sans);
+  color: var(--text);
+  background: var(--bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Industrial terminal: subtle film grain (pointer-events none). */
+body.app-terminal {
+  margin: 0;
+  position: relative;
+  background-color: var(--bg);
+}
+
+body.app-terminal::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.045;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+#root {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 1100px;
+  margin: 0 auto;
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 0.88em;
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  background: var(--panel-head);
+  color: var(--text-h);
+}
+
+.dev-perf-hud-aside {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 9999;
+  width: min(280px, calc(100vw - 24px));
+  margin: 0;
+  pointer-events: none;
+}
+
+.dev-perf-hud {
+  margin: 0;
+  padding: 0;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: var(--text);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(8px);
+  font-family: var(--mono);
+  pointer-events: auto;
+}
+
+.dev-perf-hud-summary {
+  cursor: pointer;
+  list-style: none;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  font-size: 0.6rem;
+  padding: 0.5rem 0.65rem 0.45rem;
+  user-select: none;
+}
+
+.dev-perf-hud-summary::-webkit-details-marker {
+  display: none;
+}
+
+.dev-perf-hud-summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 0.35rem;
+  color: var(--accent);
+  transition: transform 0.15s ease;
+}
+
+.dev-perf-hud[open] .dev-perf-hud-summary::before {
+  transform: rotate(90deg);
+}
+
+.dev-perf-hud-summary:focus {
+  outline: none;
+}
+
+.dev-perf-hud-summary:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.dev-perf-hud-body {
+  padding: 0 0.65rem 0.55rem;
+  border-top: 1px solid var(--border);
+}
+
+.dev-perf-hud-dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.65rem;
+  margin: 0;
+}
+
+.dev-perf-hud-dl dt {
+  margin: 0;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.dev-perf-hud-dl dd {
+  margin: 0;
+  text-align: right;
+  color: var(--text-h);
+}
+
+.dev-perf-hud-mono {
+  font-size: 0.62rem;
+  word-break: break-word;
+}
+
+.dev-perf-hud-stale-dd {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.2rem;
+}
+
+.dev-perf-hud-stale-count {
+  line-height: 1.2;
+}
+
+.dev-perf-hud-stale-list {
+  align-self: stretch;
+  margin: 0;
+  padding: 0 0 0 0.85rem;
+  font-size: 0.6rem;
+  line-height: 1.4;
+  text-align: left;
+  word-break: break-word;
+  list-style: disc;
+}
+
+.dev-perf-hud-stale-list li {
+  margin: 0;
+}
+
+.dev-perf-hud-muted {
+  color: var(--muted);
+  font-weight: 500;
+}
