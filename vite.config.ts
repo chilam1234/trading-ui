@@ -1,6 +1,7 @@
 import babel from '@rolldown/plugin-babel'
-import react, { reactCompilerPreset } from '@vitejs/plugin-react'
+import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vitest/config'
+import { reactCompilerPreset } from './src/vite/reactCompilerPreset'
 
 // https://vite.dev/config/
 // React Compiler: https://react.dev/learn/react-compiler — requires @rolldown/plugin-babel + babel-plugin-react-compiler
