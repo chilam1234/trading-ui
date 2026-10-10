@@ -12,6 +12,11 @@ interface ImportMetaEnv {
    * Avoids browser CORS when the static app cannot call `api.binance.com` directly.
    */
   readonly VITE_EXCHANGE_PROXY?: string
+  /**
+   * When `"1"` or `"true"`, the kline chart panel is not mounted (memory / GPU A/B testing).
+   * Or set `localStorage['trading-ui.hide-chart'] = '1'` and reload.
+   */
+  readonly VITE_HIDE_CHART?: string
 }
 
 interface ImportMeta {

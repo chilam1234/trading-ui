@@ -38,6 +38,14 @@ export const MarketSessionHelp = memo(function MarketSessionHelp() {
           </a>
           .
         </p>
+        <p>
+          <strong>Pulse</strong> shows mid/spread, short-window aggressive flow (print bias), and book
+          imbalance (not investment advice). <strong>Session</strong> aggregates tape in the
+          in-memory buffer (VWAP, hi/lo, largest print notional). <strong>24h</strong> is from Binance
+          REST <code>ticker/24hr</code> (refreshed periodically). The chart can show{' '}
+          <strong>SMA(20)</strong> on closes — educational; it does not predict returns or recommend
+          trades.
+        </p>
       </div>
     </details>
   )

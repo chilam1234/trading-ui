@@ -20,6 +20,14 @@ const pendingDepths = new Map<string, WorkerDepthPatch>()
 const pendingKlines: import('../lib/binance/types').KlineTick[] = []
 let flushTimer: ReturnType<typeof setTimeout> | null = null
 const BATCH_WINDOW_MS = 16
+/** If main thread is slow, worker queues can grow without bound — cap + flush early. */
+const MAX_PENDING_TRADES_WORKER = 2_500
+const MAX_PENDING_KLINES_WORKER = 400
+/**
+ * postMessage uses structured clone; one giant batch can throw DataCloneError / OOM under pressure.
+ */
+const MAX_TRADES_PER_POST = 200
+const MAX_KLINES_PER_POST = 200
 const seenDepthStreams = new Set<string>()
 
 function pairKeyForStream(stream: string): string {
@@ -48,21 +56,60 @@ function flushBatch() {
   ) {
     return
   }
-  const out: WorkerBatchMessage = {
-    kind: 'batch',
-    trades: pendingTrades.splice(0),
-    books: [...pendingBooks.values()],
-    depths: [...pendingDepths.values()],
-    klines: pendingKlines.splice(0),
-  }
+
+  const books = [...pendingBooks.values()]
   pendingBooks.clear()
+  const depths = [...pendingDepths.values()]
   pendingDepths.clear()
-  self.postMessage(out)
+  const klinesAll = pendingKlines.splice(0)
+
+  const tradeChunks: import('../lib/binance/types').AggTradeFields[][] = []
+  while (pendingTrades.length > 0) {
+    tradeChunks.push(pendingTrades.splice(0, MAX_TRADES_PER_POST))
+  }
+  if (tradeChunks.length === 0) {
+    tradeChunks.push([])
+  }
+
+  const klineChunks: import('../lib/binance/types').KlineTick[][] = []
+  for (let i = 0; i < klinesAll.length; i += MAX_KLINES_PER_POST) {
+    klineChunks.push(klinesAll.slice(i, i + MAX_KLINES_PER_POST))
+  }
+  if (klineChunks.length === 0) {
+    klineChunks.push([])
+  }
+
+  const rounds = Math.max(tradeChunks.length, klineChunks.length)
+  for (let i = 0; i < rounds; i++) {
+    const out: WorkerBatchMessage = {
+      kind: 'batch',
+      trades: tradeChunks[i] ?? [],
+      books: i === 0 ? books : [],
+      depths: i === 0 ? depths : [],
+      klines: klineChunks[i] ?? [],
+    }
+    self.postMessage(out)
+  }
 }
 
 function scheduleFlush() {
   if (flushTimer) return
   flushTimer = setTimeout(flushBatch, BATCH_WINDOW_MS)
+}
+
+function scheduleFlushOrDrainNow() {
+  if (
+    pendingTrades.length >= MAX_PENDING_TRADES_WORKER ||
+    pendingKlines.length >= MAX_PENDING_KLINES_WORKER
+  ) {
+    if (flushTimer) {
+      clearTimeout(flushTimer)
+      flushTimer = null
+    }
+    flushBatch()
+    return
+  }
+  scheduleFlush()
 }
 
 /** Accepts Binance combined-stream JSON or the same `{ stream, data }` shape built from fanout `snapshot`/`update`. */
@@ -79,14 +126,17 @@ self.onmessage = (ev: MessageEvent<string>) => {
   if (trade) {
     const key = `${trade.symbol}:${trade.id}`
     if (rememberTradeKey(key)) pendingTrades.push(trade)
-    scheduleFlush()
+    if (pendingTrades.length > MAX_PENDING_TRADES_WORKER) {
+      pendingTrades.splice(0, pendingTrades.length - MAX_PENDING_TRADES_WORKER)
+    }
+    scheduleFlushOrDrainNow()
     return
   }
 
   const book = parseBookTicker(parsed)
   if (book) {
     pendingBooks.set(book.symbol, { pairKey: book.symbol.toUpperCase(), book })
-    scheduleFlush()
+    scheduleFlushOrDrainNow()
     return
   }
 
@@ -101,13 +151,16 @@ self.onmessage = (ev: MessageEvent<string>) => {
       key: partialDepthContentKey(depth.book),
       firstDepthHint,
     })
-    scheduleFlush()
+    scheduleFlushOrDrainNow()
     return
   }
 
   const kline = parseKline(parsed)
   if (kline) {
     pendingKlines.push(kline)
-    scheduleFlush()
+    if (pendingKlines.length > MAX_PENDING_KLINES_WORKER) {
+      pendingKlines.splice(0, pendingKlines.length - MAX_PENDING_KLINES_WORKER)
+    }
+    scheduleFlushOrDrainNow()
   }
 }

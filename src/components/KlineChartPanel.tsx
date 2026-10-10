@@ -1,4 +1,11 @@
-import { useCallback, useId, useMemo, useState, type KeyboardEvent } from 'react'
+import {
+  useCallback,
+  useId,
+  useMemo,
+  useState,
+  type ChangeEvent,
+  type KeyboardEvent,
+} from 'react'
 import type {
   DraggableAttributes,
   DraggableSyntheticListeners,
@@ -7,7 +14,11 @@ import type { CandlestickData } from 'lightweight-charts'
 import { formatPairDisplay } from '../lib/binance/streamSymbols'
 import { CandleChart } from './CandleChart'
 
+/** Stable empty ref so parent re-renders do not change `candles` identity every frame. */
+const EMPTY_CANDLES: CandlestickData[] = []
+
 const STORAGE_KEY = 'trading-ui.chart-pair-symbol'
+const SMA_STORAGE_KEY = 'trading-ui.chart-show-sma'
 
 type Props = {
   candlesBySymbol: Readonly<Record<string, CandlestickData[]>>
@@ -49,6 +60,23 @@ export function KlineChartPanel(props: Props) {
 
   /** User tab choice. If it leaves `klineSymbols`, it is ignored until valid again (no stale UI). */
   const [userSelected, setUserSelected] = useState<string | null>(null)
+  const [showSma, setShowSma] = useState(() => {
+    try {
+      return localStorage.getItem(SMA_STORAGE_KEY) !== '0'
+    } catch {
+      return true
+    }
+  })
+
+  const onToggleSma = useCallback((e: ChangeEvent<HTMLInputElement>) => {
+    const v = e.target.checked
+    setShowSma(v)
+    try {
+      localStorage.setItem(SMA_STORAGE_KEY, v ? '1' : '0')
+    } catch {
+      // ignore
+    }
+  }, [])
 
   const chartSymbol = useMemo(() => {
     if (klineSymbols.length === 0) return primarySymbol
@@ -90,7 +118,7 @@ export function KlineChartPanel(props: Props) {
     [baseId, chartSymbol, klineSymbols, onSelectPair],
   )
 
-  const candles = candlesBySymbol[chartSymbol] ?? []
+  const candles = candlesBySymbol[chartSymbol] ?? EMPTY_CANDLES
   const title = `${chartSymbol} · 1m`
   const multi = klineSymbols.length > 1
 
@@ -125,6 +153,14 @@ export function KlineChartPanel(props: Props) {
           })}
         </div>
       ) : null}
+      <label className="chart-sma-toggle">
+        <input
+          type="checkbox"
+          checked={showSma}
+          onChange={onToggleSma}
+        />
+        <span>SMA(20)</span>
+      </label>
       <div
         id={panelDomId}
         role={multi ? 'tabpanel' : undefined}
@@ -137,6 +173,7 @@ export function KlineChartPanel(props: Props) {
           candles={candles}
           title={title}
           sortableTitleHandle={sortableTitleHandle}
+          showSma={showSma}
         />
       </div>
     </div>

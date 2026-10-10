@@ -1,13 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { mergeKlineIntoCandles } from '../lib/binance/klineMerge'
-import {
-  parseAggTrade,
-  parseBookTicker,
-  parseKline,
-  parsePartialDepthWithStream,
-} from '../lib/binance/parse'
 import type { WorkerBatchMessage } from '../lib/binance/ingestWorkerTypes'
-import { partialDepthContentKey } from '../lib/binance/partialDepthContentKey'
 import { isDepthStreamId, symbolForStream } from '../lib/binance/streamSymbols'
 import type {
   BookTop,
@@ -17,98 +10,48 @@ import type {
   PartialDepthBook,
 } from '../lib/binance/types'
 import type { CandlestickData } from 'lightweight-charts'
+import { applyPartialDepthFlush } from './useBinanceMarket/applyPartialDepthFlush'
+import { buildCombinedUrl } from './useBinanceMarket/buildCombinedUrl'
+import { selectDepthStreamsForFlush } from './useBinanceMarket/depthFlushSelection'
+import { createMarketParseWorker } from './useBinanceMarket/createMarketParseWorker'
+import { tryEnvelopeToWorkerBatch } from './useBinanceMarket/envelopeToWorkerBatch'
+import { filterRecordKeepingKeys } from './useBinanceMarket/filterRecordByAllowlist'
+import type { FanoutServerMessage } from './useBinanceMarket/fanoutTypes'
+import { mergeTradeBatchIntoPrev } from './useBinanceMarket/mergeTradesBatch'
+import {
+  DEFAULT_HOST,
+  DEPTH_STALE_RECONNECT_COOLDOWN_MS,
+  DEPTH_STALE_RECONNECT_MS,
+  FANOUT_WS_DEFAULT,
+  INITIAL_BACKOFF_MS,
+  MARKET_SOURCE,
+  MAX_BACKOFF_MS,
+  MAX_DIRECT_COMBINED_STREAMS,
+  MAX_DIRECT_COMBINED_URL_LENGTH,
+  MAX_TRADES,
+  PENDING_KLINES_FLUSH_NOW,
+  PENDING_TRADES_FLUSH_NOW,
+  PREV_DEDUP_HEAD,
+  STALE_DEPTH_SCAN_CAP,
+  WS_MSGS_FLUSH_NOW,
+} from './useBinanceMarket/marketIngestConstants'
+import type {
+  BackendHealth,
+  IngestFlushMetrics,
+  MarketStats,
+} from './useBinanceMarket/marketTypes'
+import { recordRawWsMessageAndCoalesceFlush } from './useBinanceMarket/recordRawWsMessageCoalescing'
+import { pruneIngestRefMaps } from './useBinanceMarket/pruneIngestRefMaps'
+import { computeStreamAllowlists } from './useBinanceMarket/streamAllowlists'
 
-const DEFAULT_HOST = 'wss://stream.binance.com:9443'
-/** Capped list length kept in React state (memory + render cost). */
-const MAX_TRADES = 1_200
-/**
- * When merging a batch, only check duplicates against this many newest rows in
- * `prev` (same order as merged array: newest first). Avoids O(prev.length) work
- * every animation frame, which was blowing heap/CPU under dev React profiling.
- */
-const PREV_DEDUP_HEAD = 512
-const DEPTH_INIT_PRIORITY_PAIRS_PER_FLUSH = 6
-const DEPTH_PER_PAIR_QUOTA = 1
-const DEPTH_MAX_STREAMS_PER_FLUSH = 48
-const INITIAL_BACKOFF_MS = 1_000
-const MAX_BACKOFF_MS = 30_000
-const DEPTH_STALE_RECONNECT_MS = 6_000
-const DEPTH_STALE_RECONNECT_COOLDOWN_MS = 15_000
-/** Max depth streams to scan per 1s window for stale reconnect (direct Binance only). */
-const STALE_DEPTH_SCAN_CAP = 64
-/** Binance combined-stream practical limits (direct URL + stream count). */
-const MAX_DIRECT_COMBINED_STREAMS = 200
-const MAX_DIRECT_COMBINED_URL_LENGTH = 8000
-const FANOUT_WS_DEFAULT = 'ws://127.0.0.1:8787/ws'
-const MARKET_SOURCE = import.meta.env.VITE_MARKET_SOURCE ?? 'direct-binance'
-
-type FanoutServerMessage =
-  | {
-      type: 'snapshot' | 'update'
-      stream: string
-      payload: unknown
-      ts: number
-    }
-  | {
-      type: 'health'
-      upstreamConnected: boolean
-      streamCount: number
-      clientCount: number
-      upstreamMsgsPerSec?: number
-      upstreamMsgTotal?: number
-      staleStreams?: Array<{ stream: string; staleForMs: number }>
-      ts: number
-    }
-  | { type: 'pong'; ts: number }
-  | { type: 'error'; reason: string; ts: number }
-
-export type MarketStats = {
-  totalMessages: number
-  /** rAF/UI commits in the last completed 1s window. */
-  flushesPerSec: number
-  /** Raw WS messages in the last completed 1s window. */
-  msgsPerSec: number
-  reconnectCount: number
-}
-
-/** Last rAF flush coalescing stats (dev HUD); updated once per flush. */
-export type IngestFlushMetrics = {
-  lastWsMsgsInFlush: number
-  lastTradeBufferLen: number
-  emaWsMsgsPerFlush: number
-  /** Worker batches received in the last completed 1s window. */
-  workerBatchesPerSec: number
-  /** Parsed payloads delivered by worker batches in the last completed 1s window. */
-  workerParsedPerSec: number
-  /** Raw messages parsed on main-thread fallback in the last completed 1s window. */
-  fallbackParsedPerSec: number
-  /** Number of pairs still waiting for first depth publication. */
-  firstDepthPending: number
-  /** Number of unique pairs served by last flush. */
-  pairsServedPerFlush: number
-  /** Remaining dirty depth streams not served in last flush. */
-  depthBacklog: number
-}
-
-export type BackendHealth = {
-  upstreamConnected: boolean
-  streamCount: number
-  clientCount: number
-  upstreamMsgsPerSec: number
-  upstreamMsgTotal: number
-  staleStreams: Array<{ stream: string; staleForMs: number }>
-}
-
-function buildCombinedUrl(streams: string[], host: string): string {
-  const path = streams.map((s) => encodeURIComponent(s)).join('/')
-  return `${host.replace(/\/$/, '')}/stream?streams=${path}`
-}
+export type { BackendHealth, IngestFlushMetrics, MarketStats } from './useBinanceMarket/marketTypes'
 
 export function useBinanceMarket(
   streams: string[],
-  options?: { wsHost?: string },
+  options?: { wsHost?: string; omitKlineState?: boolean },
 ) {
-  const host = options?.wsHost ?? DEFAULT_HOST
+  const omitKlineState = options?.omitKlineState ?? false
+  const host = options?.wsHost ?? import.meta.env.VITE_BINANCE_HOST ?? DEFAULT_HOST
   const fanoutWsUrl = import.meta.env.VITE_FANOUT_WS_URL ?? FANOUT_WS_DEFAULT
   const useFanout = MARKET_SOURCE === 'backend-fanout'
   const streamsKey = streams.join(',')
@@ -279,36 +222,13 @@ export function useBinanceMarket(
       bumpSecondWindow(now)
 
       if (batch.length > 0) {
-        setTrades((prev) => {
-          if (workerModeRef.current) {
-            const incoming = batch.slice().reverse()
-            return incoming.length + prev.length > MAX_TRADES
-              ? [...incoming, ...prev].slice(0, MAX_TRADES)
-              : [...incoming, ...prev]
-          }
-          const incoming = batch.slice().reverse()
-          const scan = Math.min(PREV_DEDUP_HEAD, prev.length)
-          const prevIds = new Set<string>()
-          for (let i = 0; i < scan; i++) {
-            const t = prev[i]!
-            prevIds.add(`${t.symbol}:${t.id}`)
-          }
-          const seenIncoming = new Set<string>()
-          const deduped: NormalizedTrade[] = []
-          for (const trade of incoming) {
-            const k = `${trade.symbol}:${trade.id}`
-            if (seenIncoming.has(k)) continue
-            seenIncoming.add(k)
-            if (prevIds.has(k)) continue
-            deduped.push(trade)
-          }
-          if (deduped.length === 0) return prev
-          const next =
-            deduped.length + prev.length > MAX_TRADES
-              ? [...deduped, ...prev].slice(0, MAX_TRADES)
-              : [...deduped, ...prev]
-          return next
-        })
+        setTrades((prev) =>
+          mergeTradeBatchIntoPrev(prev, batch, {
+            workerMode: workerModeRef.current,
+            maxTrades: MAX_TRADES,
+            prevDedupHead: PREV_DEDUP_HEAD,
+          }),
+        )
       }
 
       if (dirtyBookSymbols.size > 0) {
@@ -331,114 +251,57 @@ export function useBinanceMarket(
 
       if (dirtyDepthStreams.size > 0) {
         const streams = [...dirtyDepthStreams]
-        const streamsByPair = new Map<string, string[]>()
-        const uninitializedPairs = new Set<string>()
-        const initializedPairs = new Set<string>()
-        for (const stream of streams) {
-          const pair =
-            depthPairByStreamRef.current.get(stream) ?? symbolForStream(stream)
-          const arr = streamsByPair.get(pair)
-          if (arr) arr.push(stream)
-          else streamsByPair.set(pair, [stream])
-          const hinted = pendingFirstDepthHintByStreamRef.current.get(stream)
-          if (hinted || !initializedDepthPairsRef.current.has(pair)) {
-            uninitializedPairs.add(pair)
-          } else {
-            initializedPairs.add(pair)
-          }
+        const { selectedStreams, pairsServed, nextRoundRobin } =
+          selectDepthStreamsForFlush(streams, {
+            getPairForStream: (stream) =>
+              depthPairByStreamRef.current.get(stream) ?? symbolForStream(stream),
+            isPairInitialized: (pair) =>
+              initializedDepthPairsRef.current.has(pair),
+            getFirstDepthHint: (stream) =>
+              pendingFirstDepthHintByStreamRef.current.get(stream),
+            depthPairRoundRobin: depthPairRoundRobinRef.current,
+          })
+        if (nextRoundRobin !== null) {
+          depthPairRoundRobinRef.current = nextRoundRobin
         }
-
-        const selectedStreams: string[] = []
-        const pairsServed = new Set<string>()
-        let selectedCount = 0
-
-        for (const pair of uninitializedPairs) {
-          if (pairsServed.size >= DEPTH_INIT_PRIORITY_PAIRS_PER_FLUSH) break
-          const q = streamsByPair.get(pair)
-          if (!q || q.length === 0) continue
-          const take = q.splice(0, DEPTH_PER_PAIR_QUOTA)
-          selectedStreams.push(...take)
-          selectedCount += take.length
-          pairsServed.add(pair)
-          if (q.length === 0) streamsByPair.delete(pair)
-          if (selectedCount >= DEPTH_MAX_STREAMS_PER_FLUSH) break
-        }
-
-        const rrPairs = [...initializedPairs]
-        if (rrPairs.length > 0 && selectedCount < DEPTH_MAX_STREAMS_PER_FLUSH) {
-          const start = depthPairRoundRobinRef.current % rrPairs.length
-          const order = [...rrPairs.slice(start), ...rrPairs.slice(0, start)]
-          let progressed = true
-          while (
-            progressed &&
-            selectedCount < DEPTH_MAX_STREAMS_PER_FLUSH &&
-            streamsByPair.size > 0
-          ) {
-            progressed = false
-            for (const pair of order) {
-              const q = streamsByPair.get(pair)
-              if (!q || q.length === 0) continue
-              const take = q.splice(0, DEPTH_PER_PAIR_QUOTA)
-              if (take.length === 0) continue
-              selectedStreams.push(...take)
-              selectedCount += take.length
-              pairsServed.add(pair)
-              progressed = true
-              if (q.length === 0) streamsByPair.delete(pair)
-              if (selectedCount >= DEPTH_MAX_STREAMS_PER_FLUSH) break
-            }
-          }
-          depthPairRoundRobinRef.current = (start + 1) % rrPairs.length
-        }
-
-        setPartialDepthByStream((prev) => {
-          let next: Record<string, PartialDepthBook> | null = null
-          for (const stream of selectedStreams) {
-            const book = depthByStreamRef.current.get(stream)
-            if (!book) {
-              continue
-            }
-            const pair =
-              depthPairByStreamRef.current.get(stream) ?? symbolForStream(stream)
-            const key =
-              pendingDepthKeyByStreamRef.current.get(stream) ??
-              partialDepthContentKey(book)
-            const lastKey = lastPublishedDepthKeyByStreamRef.current.get(stream)
-            dirtyDepthStreams.delete(stream)
-            pendingFirstDepthHintByStreamRef.current.delete(stream)
-            if (lastKey === key) {
-              continue
-            }
-            lastPublishedDepthKeyByStreamRef.current.set(stream, key)
-            initializedDepthPairsRef.current.add(pair)
-            lastDepthPublishedAtByStreamRef.current.set(stream, Date.now())
-            if (!next) next = { ...prev }
-            next[stream] = book
-          }
-          for (const stream of selectedStreams) {
-            pendingDepthKeyByStreamRef.current.delete(stream)
-          }
-          const pendingPairs = new Set<string>()
-          for (const stream of dirtyDepthStreams) {
-            const pair =
-              depthPairByStreamRef.current.get(stream) ?? symbolForStream(stream)
-            if (!initializedDepthPairsRef.current.has(pair)) pendingPairs.add(pair)
-          }
-          lastFirstDepthPendingRef.current = pendingPairs.size
-          lastPairsServedRef.current = pairsServed.size
-          lastDepthBacklogRef.current = dirtyDepthStreams.size
-          return next ?? prev
-        })
+        setPartialDepthByStream((prev) =>
+          applyPartialDepthFlush(
+            prev,
+            selectedStreams,
+            pairsServed,
+            {
+              depthByStream: depthByStreamRef.current,
+              depthPairByStream: depthPairByStreamRef.current,
+              pendingDepthKeyByStream: pendingDepthKeyByStreamRef.current,
+              pendingFirstDepthHintByStream:
+                pendingFirstDepthHintByStreamRef.current,
+              dirtyDepthStreams,
+              lastPublishedDepthKeyByStream:
+                lastPublishedDepthKeyByStreamRef.current,
+              initializedDepthPairs: initializedDepthPairsRef.current,
+              lastDepthPublishedAtByStream:
+                lastDepthPublishedAtByStreamRef.current,
+              lastFirstDepthPending: lastFirstDepthPendingRef,
+              lastPairsServed: lastPairsServedRef,
+              lastDepthBacklog: lastDepthBacklogRef,
+            },
+            symbolForStream,
+          ),
+        )
       }
 
       if (klinesFlush.length > 0) {
         setCandlesBySymbol((prev) => {
-          const next = { ...prev }
+          let next: Record<string, CandlestickData[]> | null = null
           for (const k of klinesFlush) {
             const sym = k.symbol
-            next[sym] = mergeKlineIntoCandles(next[sym] ?? [], k)
+            const cur = prev[sym]
+            const merged = mergeKlineIntoCandles(cur ?? [], k)
+            if (merged === cur) continue
+            if (!next) next = { ...prev }
+            next[sym] = merged
           }
-          return next
+          return next ?? prev
         })
       }
 
@@ -458,12 +321,52 @@ export function useBinanceMarket(
           depthBacklog: lastDepthBacklogRef.current,
         }))
       }
+
+      const allowed = computeStreamAllowlists(streamsSnapshot)
+      const { allowedDepthIds, allowedSyms, allowedKlineSyms } = allowed
+
+      pruneIngestRefMaps(allowed, {
+        bookBySymbol: bookBySymbolRef.current,
+        lastPublishedBookIdBySymbol: lastPublishedBookIdBySymbolRef.current,
+        dirtyBookSymbols: dirtyBookSymbolsRef.current,
+        depthByStream: depthByStreamRef.current,
+        depthPairByStream: depthPairByStreamRef.current,
+        pendingDepthKeyByStream: pendingDepthKeyByStreamRef.current,
+        pendingFirstDepthHintByStream: pendingFirstDepthHintByStreamRef.current,
+        dirtyDepthStreams: dirtyDepthStreamsRef.current,
+        lastPublishedDepthKeyByStream: lastPublishedDepthKeyByStreamRef.current,
+        lastDepthSeenAtByStream: lastDepthSeenAtByStreamRef.current,
+        lastDepthPublishedAtByStream: lastDepthPublishedAtByStreamRef.current,
+        initializedDepthPairs: initializedDepthPairsRef.current,
+      })
+
+      setBookTopBySymbol((prev) =>
+        filterRecordKeepingKeys(prev, (key) => allowedSyms.has(key)),
+      )
+      setPartialDepthByStream((prev) =>
+        filterRecordKeepingKeys(prev, (key) =>
+          allowedDepthIds.has(key.toLowerCase()),
+        ),
+      )
+      setCandlesBySymbol((prev) =>
+        filterRecordKeepingKeys(prev, (key) => allowedKlineSyms.has(key)),
+      )
     }
 
     const scheduleFlush = () => {
       if (scheduledRef.current) return
       scheduledRef.current = true
       rafRef.current = requestAnimationFrame(flush)
+    }
+
+    /** Cancel scheduled RAF and run flush now (bounded backlog — see PENDING_* constants). */
+    const runFlushNow = () => {
+      if (scheduledRef.current && rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current)
+      }
+      rafRef.current = null
+      scheduledRef.current = false
+      flush()
     }
 
     const clearReconnect = () => {
@@ -477,66 +380,8 @@ export function useBinanceMarket(
       envelope: unknown,
       source: 'worker' | 'fallback',
     ) => {
-      const trade = parseAggTrade(envelope)
-      if (trade) {
-        return ingestBatch(
-          {
-            kind: 'batch',
-            trades: [trade],
-            books: [],
-            depths: [],
-            klines: [],
-          },
-          source,
-        )
-      }
-      const book = parseBookTicker(envelope)
-      if (book) {
-        return ingestBatch(
-          {
-            kind: 'batch',
-            trades: [],
-            books: [{ pairKey: book.symbol.toUpperCase(), book }],
-            depths: [],
-            klines: [],
-          },
-          source,
-        )
-      }
-      const depthLabeled = parsePartialDepthWithStream(envelope)
-      if (depthLabeled) {
-        return ingestBatch(
-          {
-            kind: 'batch',
-            trades: [],
-            books: [],
-            depths: [
-              {
-                pairKey: symbolForStream(depthLabeled.stream),
-                stream: depthLabeled.stream,
-                book: depthLabeled.book,
-                key: partialDepthContentKey(depthLabeled.book),
-                firstDepthHint: false,
-              },
-            ],
-            klines: [],
-          },
-          source,
-        )
-      }
-      const kline = parseKline(envelope)
-      if (kline) {
-        return ingestBatch(
-          {
-            kind: 'batch',
-            trades: [],
-            books: [],
-            depths: [],
-            klines: [kline],
-          },
-          source,
-        )
-      }
+      const batch = tryEnvelopeToWorkerBatch(envelope)
+      if (batch) ingestBatch(batch, source)
     }
 
     const ingestBatch = (
@@ -581,10 +426,17 @@ export function useBinanceMarket(
           dirtyDepthStreamsRef.current.add(depth.stream)
         }
       }
-      if (batch.klines.length > 0) {
+      if (batch.klines.length > 0 && !omitKlineState) {
         pendingKlinesRef.current.push(...batch.klines)
       }
       scheduleFlush()
+      if (
+        pendingTradesRef.current.length >= PENDING_TRADES_FLUSH_NOW ||
+        pendingKlinesRef.current.length >= PENDING_KLINES_FLUSH_NOW ||
+        wsMsgsSinceFlushRef.current >= WS_MSGS_FLUSH_NOW
+      ) {
+        runFlushNow()
+      }
     }
 
     const connect = () => {
@@ -628,23 +480,13 @@ export function useBinanceMarket(
       }
       if (typeof Worker !== 'undefined') {
         workerModeRef.current = true
-        parserWorker = new Worker(
-          new URL('../workers/marketParse.worker.ts', import.meta.url),
-          { type: 'module' },
+        parserWorker = createMarketParseWorker(
+          (data) => ingestBatch(data, 'worker'),
+          () => {
+            parserWorker = null
+            workerModeRef.current = false
+          },
         )
-        parserWorker.onmessage = (ev: MessageEvent<WorkerBatchMessage>) => {
-          ingestBatch(ev.data, 'worker')
-        }
-        parserWorker.onerror = () => {
-          parserWorker?.terminate()
-          parserWorker = null
-          workerModeRef.current = false
-        }
-        parserWorker.onmessageerror = () => {
-          parserWorker?.terminate()
-          parserWorker = null
-          workerModeRef.current = false
-        }
       } else {
         workerModeRef.current = false
       }
@@ -693,71 +535,60 @@ export function useBinanceMarket(
               upstreamMsgsPerSec: msg.upstreamMsgsPerSec ?? 0,
               upstreamMsgTotal: msg.upstreamMsgTotal ?? 0,
               staleStreams: msg.staleStreams ?? [],
+              streamRates: msg.streamRates,
             })
             return
           }
           if (msg.type === 'error' || msg.type === 'pong') return
-          wsMsgsSinceFlushRef.current += 1
-          totalMessagesRef.current += 1
-          msgsInSecondRef.current += 1
-          const now = performance.now()
-          bumpSecondWindow(now)
+          recordRawWsMessageAndCoalesceFlush({
+            wsMsgsSinceFlushRef,
+            totalMessagesRef,
+            msgsInSecondRef,
+            bumpSecondWindow,
+            scheduleFlush,
+            runFlushNow,
+            wsMsgsFlushNow: WS_MSGS_FLUSH_NOW,
+          })
           const envelope = { stream: msg.stream, data: msg.payload }
           const combinedFrame = JSON.stringify(envelope)
           if (parserWorker) {
             parserWorker.postMessage(combinedFrame)
           } else if (workerModeRef.current) {
-            parserWorker = new Worker(
-              new URL('../workers/marketParse.worker.ts', import.meta.url),
-              { type: 'module' },
+            parserWorker = createMarketParseWorker(
+              (data) => ingestBatch(data, 'worker'),
+              () => {
+                parserWorker = null
+                workerModeRef.current = false
+              },
             )
-            parserWorker.onmessage = (mEv: MessageEvent<WorkerBatchMessage>) => {
-              ingestBatch(mEv.data, 'worker')
-            }
-            parserWorker.onerror = () => {
-              parserWorker?.terminate()
-              parserWorker = null
-              workerModeRef.current = false
-            }
-            parserWorker.onmessageerror = () => {
-              parserWorker?.terminate()
-              parserWorker = null
-              workerModeRef.current = false
-            }
             parserWorker.postMessage(combinedFrame)
           } else {
             ingestEnvelopeFallback(envelope, 'fallback')
           }
           return
         }
-        wsMsgsSinceFlushRef.current += 1
-        totalMessagesRef.current += 1
-        msgsInSecondRef.current += 1
-        const now = performance.now()
-        bumpSecondWindow(now)
+        recordRawWsMessageAndCoalesceFlush({
+          wsMsgsSinceFlushRef,
+          totalMessagesRef,
+          msgsInSecondRef,
+          bumpSecondWindow,
+          scheduleFlush,
+          runFlushNow,
+          wsMsgsFlushNow: WS_MSGS_FLUSH_NOW,
+        })
 
         if (parserWorker && typeof ev.data === 'string') {
           parserWorker.postMessage(ev.data)
           return
         }
         if (!parserWorker && workerModeRef.current) {
-          parserWorker = new Worker(
-            new URL('../workers/marketParse.worker.ts', import.meta.url),
-            { type: 'module' },
+          parserWorker = createMarketParseWorker(
+            (data) => ingestBatch(data, 'worker'),
+            () => {
+              parserWorker = null
+              workerModeRef.current = false
+            },
           )
-          parserWorker.onmessage = (mEv: MessageEvent<WorkerBatchMessage>) => {
-            ingestBatch(mEv.data, 'worker')
-          }
-          parserWorker.onerror = () => {
-            parserWorker?.terminate()
-            parserWorker = null
-            workerModeRef.current = false
-          }
-          parserWorker.onmessageerror = () => {
-            parserWorker?.terminate()
-            parserWorker = null
-            workerModeRef.current = false
-          }
           if (typeof ev.data === 'string') {
             parserWorker.postMessage(ev.data)
             return
@@ -829,7 +660,7 @@ export function useBinanceMarket(
       }
       ws = null
     }
-  }, [fanoutWsUrl, host, streams, streamsKey, useFanout])
+  }, [fanoutWsUrl, host, omitKlineState, streams, streamsKey, useFanout])
 
   return {
     connection,

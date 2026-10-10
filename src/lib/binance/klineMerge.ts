@@ -13,6 +13,16 @@ export function klineToCandle(k: KlineTick): CandlestickData {
   }
 }
 
+function sameCandle(a: CandlestickData, b: CandlestickData): boolean {
+  return (
+    a.time === b.time &&
+    a.open === b.open &&
+    a.high === b.high &&
+    a.low === b.low &&
+    a.close === b.close
+  )
+}
+
 /** Merge one kline update into sorted OHLC history (replace same openTime or append). */
 export function mergeKlineIntoCandles(
   prev: CandlestickData[],
@@ -23,6 +33,8 @@ export function mergeKlineIntoCandles(
   const i = prev.findIndex((c) => (c.time as number) === t)
   let next: CandlestickData[]
   if (i >= 0) {
+    const old = prev[i]!
+    if (sameCandle(old, bar)) return prev
     next = [...prev]
     next[i] = bar
   } else {

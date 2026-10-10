@@ -26,7 +26,9 @@ function saveToStorage(selected: Set<string>) {
 
 /**
  * Selected pairs for UI (tape + order books). Selection is only meaningful for
- * **subscribed** symbols (from WebSocket streams); merges when that set changes.
+ * **subscribed** symbols (from WebSocket streams). After the first load, whenever
+ * the subscribed set changes, selection resets to **all** allowed pairs so new streams
+ * show tape/books without extra clicks.
  */
 export function useSelectedStreamPairs(subscribedSymbols: readonly string[]) {
   const allowedKey = [...subscribedSymbols].sort().join(',')
@@ -49,14 +51,8 @@ export function useSelectedStreamPairs(subscribedSymbols: readonly string[]) {
         setSelected(loadFromStorage(allowed))
         return
       }
-      setSelected((prev) => {
-        const next = new Set<string>()
-        for (const s of allowed) {
-          if (prev.has(s)) next.add(s)
-          else next.add(s)
-        }
-        return next
-      })
+      // Subscription list changed: show every subscribed pair by default (new streams appear selected).
+      setSelected(new Set(allowed))
     })
   }, [allowedKey, subscribedSymbols])
 

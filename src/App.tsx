@@ -8,7 +8,7 @@ import {
   saveExtraSymbols,
 } from './config/extraSymbolsStorage'
 /** Liquid pair: primary market (public streams, no API key). */
-const SYMBOL = 'btcusdt'
+const SYMBOL = (import.meta.env.VITE_PRIMARY_SYMBOL ?? 'btcusdt').toLowerCase()
 
 function App() {
   const [extraSymbols, setExtraSymbols] = useState<string[]>(loadExtraSymbols)

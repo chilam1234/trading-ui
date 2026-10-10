@@ -364,18 +364,211 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* --- Pulse strip --- */
-.pulse-strip-list {
+/* --- Pair desk strip (same arrangement as order-book: horizontal scroll of cards) --- */
+.pair-desk-strip-stack {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
   width: 100%;
   margin-top: 0.5rem;
   box-sizing: border-box;
+  min-width: 0;
 }
 
-.pulse-strip-list .pulse-strip {
+.pair-desk-strip-scroll {
+  overflow-x: auto;
+  overflow-y: visible;
+  width: 100%;
+  flex: 0 0 auto;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
+}
+
+.pair-desk-strip-track {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 0;
+  min-height: 100%;
+}
+
+/* One column per pair — same role as .ob-strip-sortable-row */
+.pair-desk-strip-cell {
+  flex: 0 0 auto;
+  width: min(26rem, 92vw);
+  min-width: min(26rem, 92vw);
+  padding-right: 12px;
+  box-sizing: border-box;
+}
+
+.pair-desk-strip-cell:last-child {
+  padding-right: 0;
+}
+
+.pair-desk-strip-stack .pulse-strip {
   margin-top: 0;
+}
+
+/* --- Pair desk card: Pulse block on top, session + 24h below (tall card, no single cram row) --- */
+.pair-desk-card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 11.5rem;
+  box-sizing: border-box;
+  border-radius: 6px;
+  border: 1px solid var(--pulse-strip-border);
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  overflow: hidden;
+}
+
+.pair-desk-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: visible;
+  width: 100%;
+}
+
+.pair-desk-track {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.55rem 0.6rem 0.65rem;
+}
+
+.pair-desk-track > .pulse-strip {
+  margin-top: 0;
+  width: 100%;
+  flex: 0 0 auto;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  box-sizing: border-box;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--pulse-strip-bg) 92%, transparent);
+  border-color: color-mix(in srgb, var(--pulse-strip-border) 75%, var(--border));
+  padding: 0.5rem 0.6rem;
+  min-height: 5.25rem;
+}
+
+.pair-desk-meta-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 0.45rem;
+  flex: 1 1 auto;
+  min-height: 3.75rem;
+  padding-top: 0.1rem;
+}
+
+.pair-desk-meta-row .session-strip {
+  flex: 1 1 12rem;
+  min-width: min(100%, 9.5rem);
+  margin: 0;
+  align-self: stretch;
+}
+
+.pair-desk-meta-row .ticker24h-strip {
+  flex: 1 1 9rem;
+  min-width: min(100%, 7.5rem);
+  margin: 0;
+  align-self: stretch;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  align-content: center;
+}
+
+.pair-desk-meta-row .ticker24h-strip--error {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.session-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.65rem;
+  padding: 0.35rem 0.6rem;
+  background: color-mix(in srgb, var(--panel-head) 90%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.72rem;
+}
+
+.session-strip-title {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.55rem;
+  color: var(--muted);
+  margin-right: 0.15rem;
+}
+
+.session-strip-item {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.05rem;
+}
+
+.session-micro-label {
+  font-size: 0.5rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.ticker24h-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.65rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
+  font-size: 0.72rem;
+}
+
+.ticker24h-strip--error {
+  color: var(--sell);
+  border-color: color-mix(in srgb, var(--sell) 35%, var(--border));
+}
+
+.ticker24h-strip--muted {
+  color: var(--muted);
+}
+
+.ticker24h-strip-title {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.55rem;
+  color: var(--muted);
+}
+
+.ticker24h-pct--up {
+  color: var(--buy);
+}
+
+.ticker24h-pct--down {
+  color: var(--sell);
+}
+
+.chart-sma-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0 0 0.4rem 0;
+  font-size: 0.78rem;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.chart-sma-toggle input {
+  accent-color: var(--accent);
 }
 
 .pulse-strip {

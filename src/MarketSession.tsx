@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { DevPerfHud } from './components/DevPerfHud'
 import { MarketSessionHelp } from './components/MarketSessionHelp'
 import { MarketHeader } from './components/MarketHeader'
@@ -7,9 +7,14 @@ import { SortableMarketPanels } from './components/SortableMarketPanels'
 import { useSelectedStreamPairs } from './hooks/useSelectedStreamPairs'
 import { useUsdtSymbolCatalog } from './hooks/useUsdtSymbolCatalog'
 import { useBinanceMarket } from './hooks/useBinanceMarket'
+import { useTicker24h } from './hooks/useTicker24h'
+import { readHideChartFlag } from './config/hideChart'
 import {
+  extractAggTradeSymbols,
   extractAllStreamSymbols,
+  extractKlineChartSymbols,
   firstDepthStreamForSymbol,
+  isDepthStreamId,
   symbolForStream,
 } from './lib/binance/streamSymbols'
 
@@ -28,6 +33,17 @@ export function MarketSession(props: {
     onAddMarketPair,
     marketSlotsRemaining = Number.POSITIVE_INFINITY,
   } = props
+
+  const [chartPanelHidden] = useState(readHideChartFlag)
+
+  /** Omit `@kline_*` from the live socket when chart is hidden — saves parse/postMessage/flush work. */
+  const streamsForSocket = useMemo(
+    () =>
+      chartPanelHidden
+        ? streams.filter((s) => !s.includes('@kline_'))
+        : streams,
+    [chartPanelHidden, streams],
+  )
 
   const subscribedSymbols = useMemo(
     () => extractAllStreamSymbols(streams),
@@ -48,7 +64,7 @@ export function MarketSession(props: {
   } = useSelectedStreamPairs(subscribedSymbols)
 
   const depthStreams = useMemo(
-    () => streams.filter((s) => s.includes('@depth')),
+    () => streams.filter(isDepthStreamId),
     [streams],
   )
 
@@ -58,35 +74,16 @@ export function MarketSession(props: {
     [depthStreams, selectedPairs],
   )
 
-  const tapeSymbols = useMemo(() => {
-    const out: string[] = []
-    const seen = new Set<string>()
-    for (const stream of streams) {
-      if (!stream.includes('@aggTrade')) continue
-      const at = stream.indexOf('@')
-      if (at <= 0) continue
-      const sym = stream.slice(0, at).toUpperCase()
-      if (seen.has(sym)) continue
-      seen.add(sym)
-      out.push(sym)
-    }
-    return out
-  }, [streams])
+  const tapeSymbols = useMemo(
+    () => extractAggTradeSymbols(streams),
+    [streams],
+  )
 
   /** Symbols with `@kline_*` subscribed (chart pair tabs). */
-  const klineSymbols = useMemo(() => {
-    const out: string[] = []
-    const seen = new Set<string>()
-    for (const stream of streams) {
-      if (!stream.includes('@kline_')) continue
-      const sym = symbolForStream(stream)
-      if (seen.has(sym)) continue
-      seen.add(sym)
-      out.push(sym)
-    }
-    out.sort()
-    return out
-  }, [streams])
+  const klineSymbols = useMemo(
+    () => extractKlineChartSymbols(streams),
+    [streams],
+  )
 
   const {
     connection,
@@ -97,7 +94,14 @@ export function MarketSession(props: {
     stats,
     ingestMetrics,
     backendHealth,
-  } = useBinanceMarket(streams)
+  } = useBinanceMarket(streamsForSocket, { omitKlineState: chartPanelHidden })
+
+  const streamsKey = useMemo(() => streams.join(','), [streams])
+
+  const { ticker24hBySymbol, ticker24hError } = useTicker24h(
+    subscribedSymbols,
+    streamsKey,
+  )
 
   const pulseRows = useMemo(() => {
     return subscribedSymbols.map((sym) => {
@@ -122,6 +126,8 @@ export function MarketSession(props: {
           ...row,
           trades,
         }))}
+        ticker24hBySymbol={ticker24hBySymbol}
+        ticker24hError={ticker24hError}
       />
       <MarketSessionHelp />
       {subscribedSymbols.length > 0 || (catalogSymbols?.length ?? 0) > 0 ? (

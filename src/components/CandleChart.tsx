@@ -7,10 +7,29 @@ import {
   CandlestickSeries,
   ColorType,
   createChart,
+  LineSeries,
   type CandlestickData,
   type ISeriesApi,
   type IChartApi,
 } from 'lightweight-charts'
+import { smaClose } from '../lib/indicators/sma'
+
+const SMA_PERIOD = 20
+
+/** Content signature for last candle row — avoids redundant lightweight-charts setData on reference churn. */
+function candleSnapshotSig(c: CandlestickData[]): string {
+  if (c.length === 0) return '0'
+  const x = c[c.length - 1]!
+  return `${c.length}:${Number(x.time)}:${x.open}:${x.high}:${x.low}:${x.close}`
+}
+
+
+/** Signature of candles[0..n) excluding the final candle — used by the update-last fast path. */
+function headSnapshotSig(c: CandlestickData[], n: number): string {
+  if (n <= 0) return '0'
+  const x = c[n - 1]!
+  return `${n}:${Number(x.time)}:${x.open}:${x.high}:${x.low}:${x.close}`
+}
 
 type Props = {
   candles: CandlestickData[]
@@ -21,13 +40,25 @@ type Props = {
     attributes: DraggableAttributes
     listeners: DraggableSyntheticListeners | undefined
   }
+  /** Overlay SMA(20) on closes — educational / non-advisory. */
+  showSma?: boolean
 }
 
-export function CandleChart({ candles, title, sortableTitleHandle }: Props) {
+export function CandleChart({
+  candles,
+  title,
+  sortableTitleHandle,
+  showSma = true,
+}: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
+  const smaSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const didFitRef = useRef(false)
+  const lastChartSigRef = useRef<string>('')
+  const prevCandlesLenRef = useRef(0)
+  const prevSigRef = useRef<string>('')
+  const prevSmaActiveRef = useRef(false)
 
   useEffect(() => {
     const el = hostRef.current
@@ -66,8 +97,17 @@ export function CandleChart({ candles, title, sortableTitleHandle }: Props) {
       wickDownColor: '#f87171',
     })
 
+    const smaSeries = chart.addSeries(LineSeries, {
+      color: '#06b6d4',
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: true,
+    })
+
     chartRef.current = chart
     seriesRef.current = series
+    smaSeriesRef.current = smaSeries
+    lastChartSigRef.current = ''
 
     const ro = new ResizeObserver((entries) => {
       const cr = entries[0]?.contentRect
@@ -81,8 +121,13 @@ export function CandleChart({ candles, title, sortableTitleHandle }: Props) {
 
     return () => {
       ro.disconnect()
+      smaSeriesRef.current = null
       seriesRef.current = null
       chartRef.current = null
+      lastChartSigRef.current = ''
+      prevCandlesLenRef.current = 0
+      prevSigRef.current = ''
+      prevSmaActiveRef.current = false
       chart.remove()
     }
   }, [])
@@ -90,13 +135,59 @@ export function CandleChart({ candles, title, sortableTitleHandle }: Props) {
   useEffect(() => {
     const series = seriesRef.current
     const chart = chartRef.current
+    const smaSeries = smaSeriesRef.current
     if (!series) return
-    series.setData(candles)
-    if (candles.length > 0 && chart && !didFitRef.current) {
-      chart.timeScale().fitContent()
-      didFitRef.current = true
+
+    const cSig = candleSnapshotSig(candles)
+    const fullSig = `${cSig}|${showSma ? 1 : 0}`
+    if (fullSig === lastChartSigRef.current) return
+    lastChartSigRef.current = fullSig
+
+    // Fast path (live ticks): same length with only the last candle changed, or one
+    // appended candle — update just the last bar. setData on every kline flush was
+    // rebuilding the whole series and ballooning the renderer heap.
+    const prevLen = prevCandlesLenRef.current
+    const last = candles[candles.length - 1]
+    const prevSig = prevSigRef.current // signature of previous array WITHOUT its last candle
+    const baseSig =
+      candles.length === prevLen
+        ? prevSig
+        : candles.length === prevLen + 1
+          ? prevSig
+          : null
+    const canFastUpdate =
+      baseSig !== null &&
+      candles.length >= 2 &&
+      headSnapshotSig(candles, candles.length - 1) === baseSig &&
+      last !== undefined
+
+    if (canFastUpdate && last !== undefined) {
+      series.update(last)
+    } else {
+      series.setData(candles)
+      if (candles.length === 0) {
+        didFitRef.current = false
+      }
+      if (candles.length > 0 && chart && !didFitRef.current) {
+        chart.timeScale().fitContent()
+        didFitRef.current = true
+      }
     }
-  }, [candles])
+
+    // SMA(20): recompute only when the candle count changes (bar set changed),
+    // not on every intra-bar tick.
+    if (smaSeries) {
+      if (!showSma || candles.length < SMA_PERIOD) {
+        if (prevSmaActiveRef.current) {
+          smaSeries.setData([])
+          prevSmaActiveRef.current = false
+        }
+      } else {
+        smaSeries.setData(smaClose(candles, SMA_PERIOD))
+        prevSmaActiveRef.current = true
+      }
+    }
+  }, [candles, showSma])
 
   return (
     <div

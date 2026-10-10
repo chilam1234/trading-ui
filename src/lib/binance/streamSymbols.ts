@@ -40,6 +40,37 @@ export function extractAllStreamSymbols(streams: readonly string[]): string[] {
   return out
 }
 
+/** Symbols with an `@aggTrade` multiplex stream (tape), first-seen order. */
+export function extractAggTradeSymbols(streams: readonly string[]): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const stream of streams) {
+    if (!stream.includes('@aggTrade')) continue
+    const at = stream.indexOf('@')
+    if (at <= 0) continue
+    const sym = stream.slice(0, at).toUpperCase()
+    if (seen.has(sym)) continue
+    seen.add(sym)
+    out.push(sym)
+  }
+  return out
+}
+
+/** Symbols with `@kline_*` multiplex streams (chart tabs), unique and sorted. */
+export function extractKlineChartSymbols(streams: readonly string[]): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const stream of streams) {
+    if (!stream.includes('@kline_')) continue
+    const sym = symbolForStream(stream)
+    if (seen.has(sym)) continue
+    seen.add(sym)
+    out.push(sym)
+  }
+  out.sort()
+  return out
+}
+
 /** First `@depth*` multiplex id in `streams` for this symbol (subscription order). */
 export function firstDepthStreamForSymbol(
   streams: readonly string[],

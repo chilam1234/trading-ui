@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  extractAggTradeSymbols,
   extractAllStreamSymbols,
+  extractKlineChartSymbols,
   firstDepthStreamForSymbol,
   formatPairDisplay,
   isDepthStreamId,
@@ -58,6 +60,24 @@ describe('extractAllStreamSymbols', () => {
       'ethusdt@aggTrade',
     ]
     expect(extractAllStreamSymbols(streams)).toEqual(['BTCUSDT', 'ETHUSDT'])
+  })
+})
+
+describe('extractAggTradeSymbols', () => {
+  it('only includes symbols with @aggTrade, first-seen order', () => {
+    const streams = [
+      'btcusdt@depth10@100ms',
+      'ethusdt@aggTrade',
+      'btcusdt@aggTrade',
+    ]
+    expect(extractAggTradeSymbols(streams)).toEqual(['ETHUSDT', 'BTCUSDT'])
+  })
+})
+
+describe('extractKlineChartSymbols', () => {
+  it('dedupes kline symbols and sorts', () => {
+    const streams = ['ethusdt@kline_1m', 'btcusdt@kline_1m', 'ethusdt@depth5@0ms']
+    expect(extractKlineChartSymbols(streams)).toEqual(['BTCUSDT', 'ETHUSDT'])
   })
 })
 

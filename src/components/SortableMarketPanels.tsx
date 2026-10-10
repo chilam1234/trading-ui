@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   DndContext,
   type DragEndEvent,
@@ -19,6 +19,7 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import type { CandlestickData } from 'lightweight-charts'
+import { readHideChartFlag } from '../config/hideChart'
 import type { NormalizedTrade, PartialDepthBook } from '../lib/binance/types'
 import { KlineChartPanel } from './KlineChartPanel'
 import { OrderBookStrip } from './OrderBookStrip'
@@ -152,6 +153,13 @@ export function SortableMarketPanels(props: {
 
   const [order, setOrder] = useState<MarketPanelId[]>(loadOrder)
 
+  const [hideChart] = useState(readHideChartFlag)
+
+  const panelOrder = useMemo(
+    () => (hideChart ? order.filter((id) => id !== 'chart') : order),
+    [hideChart, order],
+  )
+
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(order))
   }, [order])
@@ -221,9 +229,9 @@ export function SortableMarketPanels(props: {
       collisionDetection={closestCenter}
       onDragEnd={onDragEnd}
     >
-      <SortableContext items={[...order]} strategy={verticalListSortingStrategy}>
+      <SortableContext items={[...panelOrder]} strategy={verticalListSortingStrategy}>
         <div className="market-panels">
-          {order.map((panelId) =>
+          {panelOrder.map((panelId) =>
             panelId === 'chart' ? (
               <SortablePanelShell
                 key={panelId}

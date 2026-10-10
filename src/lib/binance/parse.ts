@@ -153,7 +153,9 @@ export function parsePartialDepthWithStream(
 ): { stream: string; book: PartialDepthBook } | null {
   const book = parsePartialDepth(raw)
   if (!book) return null
-  const stream = parseCombinedStreamName(raw) ?? DEPTH_STREAM_FALLBACK
+  const rawName = parseCombinedStreamName(raw) ?? DEPTH_STREAM_FALLBACK
+  /** Match subscription multiplex ids (lowercase) so Map/React keys do not split by casing. */
+  const stream = rawName.toLowerCase()
   return { stream, book }
 }
 

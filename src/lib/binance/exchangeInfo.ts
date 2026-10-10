@@ -1,12 +1,9 @@
+import { binanceSpotApiUrl } from './binanceRestBase'
+
 const EXCHANGE_INFO_PATH = '/api/v3/exchangeInfo'
 
 function exchangeInfoUrl(): string {
-  if (import.meta.env.VITE_EXCHANGE_PROXY === '1') {
-    return `/binance-api${EXCHANGE_INFO_PATH}`
-  }
-  return import.meta.env.DEV
-    ? `/binance-api${EXCHANGE_INFO_PATH}`
-    : `https://api.binance.com${EXCHANGE_INFO_PATH}`
+  return binanceSpotApiUrl(EXCHANGE_INFO_PATH)
 }
 
 type ExchangeSymbol = {
