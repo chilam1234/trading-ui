@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useFrameTimeSampler } from '../hooks/useFrameTimeSampler'
 import { useLongTaskObserver } from '../hooks/useLongTaskObserver'
 import type {
@@ -6,6 +6,7 @@ import type {
   IngestFlushMetrics,
   MarketStats,
 } from '../hooks/useBinanceMarket'
+import { sharedRenderBudget } from '../lib/render/budget'
 
 type Props = {
   stats: MarketStats
@@ -13,11 +14,45 @@ type Props = {
   backendHealth?: BackendHealth | null
 }
 
+type HudSnap = {
+  stats: MarketStats
+  ingest: IngestFlushMetrics
+  backendHealth: BackendHealth | null
+  paintedLastSecond: number
+}
+
+/** DEV PERF overlay: props snapshotted at 1 Hz to limit style/DOM churn. */
 export function DevPerfHud(props: Props) {
-  const { stats, ingest, backendHealth = null } = props
+  const propsRef = useRef(props)
+  propsRef.current = props
+
   const [perfHudOpen, setPerfHudOpen] = useState(true)
-  const frames = useFrameTimeSampler(true)
+  const [snap, setSnap] = useState<HudSnap>(() => ({
+    stats: props.stats,
+    ingest: props.ingest,
+    backendHealth: props.backendHealth ?? null,
+    paintedLastSecond: 0,
+  }))
+
+  const frames = useFrameTimeSampler(true, 1000)
   const longTasks = useLongTaskObserver(true)
+
+  useEffect(() => {
+    const tick = () => {
+      const p = propsRef.current
+      setSnap({
+        stats: p.stats,
+        ingest: p.ingest,
+        backendHealth: p.backendHealth ?? null,
+        paintedLastSecond: sharedRenderBudget.paintedLastSecond,
+      })
+    }
+    tick()
+    const iv = window.setInterval(tick, 1000)
+    return () => clearInterval(iv)
+  }, [])
+
+  const { stats, ingest, backendHealth, paintedLastSecond } = snap
 
   const staleSorted =
     backendHealth && backendHealth.staleStreams.length > 0
@@ -54,6 +89,8 @@ export function DevPerfHud(props: Props) {
             <dd>{frames.p95Ms.toFixed(2)} ms</dd>
             <dt>Frame samples</dt>
             <dd>{frames.sampleCount}</dd>
+            <dt>Painted /s</dt>
+            <dd>{paintedLastSecond}</dd>
             <dt>Long tasks (10s)</dt>
             <dd>
               {longTasks.supported

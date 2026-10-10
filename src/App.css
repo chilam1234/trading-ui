@@ -22,6 +22,33 @@
   margin-bottom: 0.5rem;
 }
 
+/* Small control beside the Markets pill (ADR-0009 low-memory / DPR=1). */
+.low-memory-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  align-self: center;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--muted);
+  padding: 0.28rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  cursor: pointer;
+  user-select: none;
+}
+
+.low-memory-toggle input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.low-memory-toggle:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  color: var(--text-h);
+}
+
 .market-session-help {
   margin: 0 0 0.85rem;
   max-width: 52rem;
@@ -98,6 +125,27 @@
   cursor: pointer;
 }
 
+/* Pressed feedback on all interactive controls (0.15s physical click feel). */
+.symbol-picker-trigger:active,
+.symbol-picker-chip:active,
+.symbol-picker-chip-x:active,
+.pair-stream-menu-trigger:active,
+.pair-stream-menu-row:active,
+.symbol-picker-row:active,
+.low-memory-toggle:active {
+  transform: scale(0.98);
+}
+
+/* Hover/active transitions were 0.15-0.18s; keep motion on transform/opacity only. */
+.symbol-picker-trigger,
+.symbol-picker-chip,
+.pair-stream-menu-trigger,
+.pair-stream-menu-row,
+.symbol-picker-row,
+.low-memory-toggle {
+  will-change: transform;
+}
+
 .symbol-picker-trigger:hover,
 .symbol-picker-trigger:focus-visible {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
@@ -154,7 +202,7 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--panel);
-  box-shadow: 0 10px 28px color-mix(in srgb, black 28%, transparent);
+  box-shadow: 0 10px 28px color-mix(in srgb, #05070c 38%, transparent);
   overflow: hidden;
 }
 
@@ -291,11 +339,13 @@
 }
 
 .market-heading {
-  font-size: 1.05rem;
-  font-weight: 600;
-  letter-spacing: -0.02em;
+  font-size: 1.45rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
   margin: 0;
-  line-height: 1.2;
+  line-height: 1.1;
+  text-wrap: balance;
+  color: var(--text-h);
 }
 
 .market-telemetry {
@@ -793,7 +843,7 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--panel);
-  box-shadow: 0 10px 28px color-mix(in srgb, black 28%, transparent);
+  box-shadow: 0 10px 28px color-mix(in srgb, #05070c 38%, transparent);
   overflow: hidden;
 }
 
@@ -1140,6 +1190,22 @@
 
 .tape-inner {
   position: relative;
+  width: 100%;
+}
+
+/* Budgeted tape: fixed slots, flow layout (no virtualizer absolute height). */
+.tape-inner--budgeted {
+  position: relative;
+  width: 100%;
+  height: auto;
+}
+
+.tape-inner--budgeted .tape-row {
+  position: relative;
+  left: auto;
+  right: auto;
+  top: auto;
+  display: grid;
   width: 100%;
 }
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import './App.css'
 import { DEFAULT_MAX_EXTRA, SymbolPicker } from './components/SymbolPicker'
+import { LowMemoryToggle } from './components/LowMemoryToggle'
 import { MarketSession } from './MarketSession'
 import { buildMarketStreams } from './config/buildStreams'
 import {
@@ -71,6 +72,7 @@ function App() {
           extraSymbols={extraSymbols}
           onExtraSymbolsChange={setExtraSymbols}
         />
+        <LowMemoryToggle />
       </div>
       <MarketSession
         key={streamsKey}

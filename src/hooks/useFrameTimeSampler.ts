@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 
 const RING = 180
-const UI_TICK_MS = 300
+/** Default UI publish interval (ADR-0009: DEV PERF at 1 Hz). */
+const UI_TICK_MS = 1000
 
 function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0
@@ -20,8 +21,12 @@ export type FrameTimeSample = {
 
 /**
  * Samples rAF delta times (rough frame budget) into a ring; exposes rolling p50/p95.
+ * @param uiTickMs how often to publish React state (default 1000ms).
  */
-export function useFrameTimeSampler(enabled: boolean): FrameTimeSample {
+export function useFrameTimeSampler(
+  enabled: boolean,
+  uiTickMs: number = UI_TICK_MS,
+): FrameTimeSample {
   const ringRef = useRef<number[]>([])
   const lastRef = useRef<number | null>(null)
   const rafIdRef = useRef<number | null>(null)
@@ -35,6 +40,7 @@ export function useFrameTimeSampler(enabled: boolean): FrameTimeSample {
     if (!enabled) return
 
     let lastUi = performance.now()
+    const publishEvery = Math.max(16, uiTickMs)
 
     const tick = (now: number) => {
       const last = lastRef.current
@@ -46,7 +52,7 @@ export function useFrameTimeSampler(enabled: boolean): FrameTimeSample {
         if (ring.length > RING) ring.shift()
       }
 
-      if (now - lastUi >= UI_TICK_MS) {
+      if (now - lastUi >= publishEvery) {
         lastUi = now
         const ring = ringRef.current
         const sorted = [...ring].sort((a, b) => a - b)
@@ -70,7 +76,7 @@ export function useFrameTimeSampler(enabled: boolean): FrameTimeSample {
       lastRef.current = null
       ringRef.current = []
     }
-  }, [enabled])
+  }, [enabled, uiTickMs])
 
   return out
 }

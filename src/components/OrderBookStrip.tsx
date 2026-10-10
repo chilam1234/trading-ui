@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
   DndContext,
   type DragEndEvent,
@@ -16,6 +16,7 @@ import {
   useSortable,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
+import { useInViewport } from '../hooks/useInViewport'
 import { symbolForStream } from '../lib/binance/streamSymbols'
 import {
   loadStreamOrder,
@@ -23,6 +24,7 @@ import {
   OB_DEPTH_STREAM_ORDER_KEY,
 } from '../lib/obStreamOrder'
 import type { PartialDepthBook } from '../lib/binance/types'
+import { RENDER_FPS, sharedRenderBudget } from '../lib/render/budget'
 import { OrderBook, type OrderBookStripSortableTitle } from './OrderBook'
 
 /** Legacy single default width (used as fallback when a stream has no per-card entry). */
@@ -96,6 +98,29 @@ function OrderBookCardCell(props: {
     stripSortableTitle,
   } = props
   const dragRef = useRef<{ startX: number; startW: number } | null>(null)
+  const cellRef = useRef<HTMLDivElement>(null)
+  const reactId = useId()
+  const panelId = `ladder:${streamId}:${reactId}`
+  const [displayDepth, setDisplayDepth] = useState(depth)
+  const depthRef = useRef(depth)
+  depthRef.current = depth
+  const inView = useInViewport(cellRef)
+  const inViewRef = useRef(inView)
+  inViewRef.current = inView
+
+  useEffect(() => {
+    const unregister = sharedRenderBudget.register(panelId, {
+      fps: RENDER_FPS.ladder,
+      isVisible: () => inViewRef.current,
+      paint: () => setDisplayDepth(depthRef.current),
+    })
+    sharedRenderBudget.markDirty(panelId)
+    return unregister
+  }, [panelId])
+
+  useEffect(() => {
+    sharedRenderBudget.markDirty(panelId)
+  }, [depth, panelId])
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -125,10 +150,10 @@ function OrderBookCardCell(props: {
   }
 
   return (
-    <div className="ob-strip-cell-inner">
+    <div className="ob-strip-cell-inner" ref={cellRef}>
       <OrderBook
         streamTitle={streamId}
-        depth={depth}
+        depth={displayDepth}
         isPrimary={isPrimary}
         stripSortableTitle={stripSortableTitle}
       />

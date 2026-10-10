@@ -7,11 +7,13 @@ import {
   useState,
 } from 'react'
 import { createPortal } from 'react-dom'
-import { useVirtualizer } from '@tanstack/react-virtual'
 import type { NormalizedTrade } from '../lib/binance/types'
 import { formatPairLabel } from '../lib/binance/formatPairLabel'
+import { useInViewport } from '../hooks/useInViewport'
+import { RENDER_FPS, sharedRenderBudget } from '../lib/render/budget'
 
-const ROW_H = 34
+/** ADR-0009: at most 30 visible tape rows; slots are reused in place. */
+export const TAPE_VISIBLE_ROWS = 30
 
 function FilterIcon() {
   return (
@@ -42,9 +44,20 @@ function formatTime(ms: number): string {
   return `${t}.${frac}`
 }
 
+type RowSlot = {
+  root: HTMLDivElement
+  pair: HTMLSpanElement | null
+  time: HTMLSpanElement
+  side: HTMLSpanElement
+  price: HTMLSpanElement
+  qty: HTMLSpanElement
+}
+
 /**
- * Single virtualized tape. Pair visibility is controlled by `selectedPairs`
+ * Single tape. Pair visibility is controlled by `selectedPairs`
  * (Stream pairs menu). Only trades whose `symbol` is selected are shown.
+ * Rows are fixed slots (max 30); paint updates text nodes in place via the
+ * shared render budget (5 fps).
  */
 export function TradeTape(props: {
   trades: NormalizedTrade[]
@@ -54,7 +67,11 @@ export function TradeTape(props: {
   selectedPairs: ReadonlySet<string>
 }) {
   const { trades, tapeSymbols, selectedPairs } = props
-  const parentRef = useRef<HTMLDivElement>(null)
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const rowsHostRef = useRef<HTMLDivElement>(null)
+  const slotsRef = useRef<RowSlot[] | null>(null)
+  const reactId = useId()
+  const panelId = `tape:${reactId}`
 
   const tapeAllowed = useMemo(
     () => new Set(tapeSymbols.map((s) => s.toUpperCase())),
@@ -137,8 +154,13 @@ export function TradeTape(props: {
     return streamSelectedTrades.filter((t) => t.symbol === pairFilter)
   }, [streamSelectedTrades, pairFilter])
 
+  const filteredRef = useRef(filteredTrades)
+  filteredRef.current = filteredTrades
+
   /** Keep Pair tags whenever multiple @aggTrade feeds exist, even if Stream pairs filter shows one market. */
   const showPairColumn = tapeSymbols.length > 1
+  const showPairColumnRef = useRef(showPairColumn)
+  showPairColumnRef.current = showPairColumn
 
   const showTapePairFilter = selectableTapeSymbols.length > 1
 
@@ -149,16 +171,92 @@ export function TradeTape(props: {
     return false
   }, [tapeSymbols, selectedPairs])
 
-  /* eslint-disable react-hooks/incompatible-library -- TanStack Virtual */
-  const virtualizer = useVirtualizer({
-    count: filteredTrades.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => ROW_H,
-    overscan: 16,
-    getItemKey: (index) => filteredTrades[index]?.ingestSeq ?? index,
-    useFlushSync: false,
-  })
-  /* eslint-enable react-hooks/incompatible-library */
+  const inView = useInViewport(wrapRef)
+  const inViewRef = useRef(inView)
+  inViewRef.current = inView
+
+  useEffect(() => {
+    const ensureSlots = (showPair: boolean): RowSlot[] => {
+      const host = rowsHostRef.current
+      if (!host) return []
+      if (slotsRef.current && slotsRef.current.length === TAPE_VISIBLE_ROWS) {
+        const hasPair = Boolean(slotsRef.current[0]?.pair)
+        if (hasPair === showPair) return slotsRef.current
+        host.replaceChildren()
+        slotsRef.current = null
+      }
+      const slots: RowSlot[] = []
+      for (let i = 0; i < TAPE_VISIBLE_ROWS; i++) {
+        const root = document.createElement('div')
+        root.className = 'tape-row'
+        root.dataset.slot = String(i)
+
+        let pair: HTMLSpanElement | null = null
+        if (showPair) {
+          pair = document.createElement('span')
+          pair.className = 'col-pair mono'
+          root.appendChild(pair)
+        }
+
+        const time = document.createElement('span')
+        time.className = 'col-time mono'
+        const side = document.createElement('span')
+        side.className = 'col-side'
+        const price = document.createElement('span')
+        price.className = 'col-price mono'
+        const qty = document.createElement('span')
+        qty.className = 'col-qty mono'
+        root.append(time, side, price, qty)
+        host.appendChild(root)
+        slots.push({ root, pair, time, side, price, qty })
+      }
+      slotsRef.current = slots
+      return slots
+    }
+
+    const paintRows = () => {
+      const showPair = showPairColumnRef.current
+      const slots = ensureSlots(showPair)
+      if (slots.length === 0) return
+      const rows = filteredRef.current
+      for (let i = 0; i < TAPE_VISIBLE_ROWS; i++) {
+        const slot = slots[i]!
+        const t = rows[i]
+        if (!t) {
+          slot.root.hidden = true
+          continue
+        }
+        slot.root.hidden = false
+        if (slot.pair) {
+          slot.pair.textContent = formatPairLabel(t.symbol)
+          slot.pair.title = t.symbol
+        }
+        slot.time.textContent = formatTime(t.eventTime)
+        const buy = t.buyerIsTaker
+        slot.side.textContent = buy ? 'Buy' : 'Sell'
+        slot.side.className = buy ? 'col-side buy' : 'col-side sell'
+        slot.price.textContent = t.price
+        slot.qty.textContent = t.quantity
+      }
+    }
+
+    const unregister = sharedRenderBudget.register(panelId, {
+      fps: RENDER_FPS.tape,
+      isVisible: () => inViewRef.current,
+      paint: () => paintRows(),
+    })
+    sharedRenderBudget.markDirty(panelId)
+    return () => {
+      unregister()
+      const host = rowsHostRef.current
+      if (host) host.replaceChildren()
+      slotsRef.current = null
+    }
+  }, [panelId])
+
+  useEffect(() => {
+    sharedRenderBudget.markDirty(panelId)
+  }, [filteredTrades, showPairColumn, panelId])
 
   if (tapeSymbols.length === 0) {
     return (
@@ -170,6 +268,7 @@ export function TradeTape(props: {
 
   return (
     <div
+      ref={wrapRef}
       className={`tape-wrap${showPairColumn ? ' tape-wrap--multi' : ''}${
         showTapePairFilter ? ' tape-wrap--pair-filter' : ''
       }`}
@@ -261,7 +360,7 @@ export function TradeTape(props: {
         <span className="col-price">Price</span>
         <span className="col-qty">Qty</span>
       </div>
-      <div className="tape-scroll" ref={parentRef}>
+      <div className="tape-scroll">
         {!hasTapeSelection ? (
           <p className="tape-filter-hint">
             Turn on at least one pair in <strong>Stream pairs</strong> to see
@@ -277,46 +376,10 @@ export function TradeTape(props: {
           </p>
         ) : null}
         <div
-          className="tape-inner"
-          style={{
-            height:
-              !hasTapeSelection || filteredTrades.length === 0
-                ? 0
-                : `${virtualizer.getTotalSize()}px`,
-          }}
-        >
-          {hasTapeSelection && filteredTrades.length > 0
-            ? virtualizer.getVirtualItems().map((vi) => {
-                const t = filteredTrades[vi.index]
-                if (!t) return null
-                const buy = t.buyerIsTaker
-                return (
-                  <div
-                    key={t.ingestSeq}
-                    className="tape-row"
-                    style={{
-                      height: `${vi.size}px`,
-                      transform: `translateY(${vi.start}px)`,
-                    }}
-                  >
-                    {showPairColumn ? (
-                      <span className="col-pair mono" title={t.symbol}>
-                        {formatPairLabel(t.symbol)}
-                      </span>
-                    ) : null}
-                    <span className="col-time mono">
-                      {formatTime(t.eventTime)}
-                    </span>
-                    <span className={buy ? 'col-side buy' : 'col-side sell'}>
-                      {buy ? 'Buy' : 'Sell'}
-                    </span>
-                    <span className="col-price mono">{t.price}</span>
-                    <span className="col-qty mono">{t.quantity}</span>
-                  </div>
-                )
-              })
-            : null}
-        </div>
+          className="tape-inner tape-inner--budgeted"
+          ref={rowsHostRef}
+          hidden={!hasTapeSelection}
+        />
       </div>
     </div>
   )

@@ -18,7 +18,9 @@ import { tryEnvelopeToWorkerBatch } from './useBinanceMarket/envelopeToWorkerBat
 import { filterRecordKeepingKeys } from './useBinanceMarket/filterRecordByAllowlist'
 import type { FanoutServerMessage } from './useBinanceMarket/fanoutTypes'
 import { mergeTradeBatchIntoPrev } from './useBinanceMarket/mergeTradesBatch'
+import { coalesceKlines } from '../lib/render/coalesceKlines'
 import {
+  CATCHUP_FLUSH_MIN_MS,
   DEFAULT_HOST,
   DEPTH_STALE_RECONNECT_COOLDOWN_MS,
   DEPTH_STALE_RECONNECT_MS,
@@ -31,7 +33,9 @@ import {
   MAX_TRADES,
   PENDING_KLINES_FLUSH_NOW,
   PENDING_TRADES_FLUSH_NOW,
+  PENDING_TRADES_SHED_HARD_CAP,
   PREV_DEDUP_HEAD,
+  RAF_GAP_SHED_MS,
   STALE_DEPTH_SCAN_CAP,
   WS_MSGS_FLUSH_NOW,
 } from './useBinanceMarket/marketIngestConstants'
@@ -102,6 +106,9 @@ export function useBinanceMarket(
 
   const rafRef = useRef<number | null>(null)
   const scheduledRef = useRef(false)
+  const lastFlushAtRef = useRef(0)
+  const lastCatchupFlushAtRef = useRef(0)
+  const lastIngestMetricsUiAtRef = useRef(0)
 
   const totalMessagesRef = useRef(0)
   const msgsInSecondRef = useRef(0)
@@ -206,18 +213,30 @@ export function useBinanceMarket(
       scheduledRef.current = false
       rafRef.current = null
 
+      const now = performance.now()
+      const gap =
+        lastFlushAtRef.current === 0 ? 0 : now - lastFlushAtRef.current
+      lastFlushAtRef.current = now
+      const shedding = gap > RAF_GAP_SHED_MS
+
       const wsIn = wsMsgsSinceFlushRef.current
       wsMsgsSinceFlushRef.current = 0
 
-      const batch = pendingTradesRef.current
-      const tradeBufferLen = batch.length
+      let batch = pendingTradesRef.current
       pendingTradesRef.current = []
+      if (shedding && batch.length > PENDING_TRADES_SHED_HARD_CAP) {
+        batch = batch.slice(batch.length - PENDING_TRADES_SHED_HARD_CAP)
+      }
+      const tradeBufferLen = batch.length
+
       const dirtyBookSymbols = dirtyBookSymbolsRef.current
       const dirtyDepthStreams = dirtyDepthStreamsRef.current
-      const klinesFlush = pendingKlinesRef.current
+      let klinesFlush = pendingKlinesRef.current
       pendingKlinesRef.current = []
+      if (shedding && klinesFlush.length > 1) {
+        klinesFlush = coalesceKlines(klinesFlush)
+      }
 
-      const now = performance.now()
       flushesInSecondRef.current += 1
       bumpSecondWindow(now)
 
@@ -250,7 +269,29 @@ export function useBinanceMarket(
       }
 
       if (dirtyDepthStreams.size > 0) {
-        const streams = [...dirtyDepthStreams]
+        let streams = [...dirtyDepthStreams]
+        if (shedding) {
+          // Keep only the latest pending depth snapshot per pair.
+          const latestByPair = new Map<string, string>()
+          for (const stream of streams) {
+            const pair =
+              depthPairByStreamRef.current.get(stream) ??
+              symbolForStream(stream)
+            const prev = latestByPair.get(pair)
+            if (!prev) {
+              latestByPair.set(pair, stream)
+              continue
+            }
+            const prevAt = lastDepthSeenAtByStreamRef.current.get(prev) ?? 0
+            const curAt = lastDepthSeenAtByStreamRef.current.get(stream) ?? 0
+            if (curAt >= prevAt) latestByPair.set(pair, stream)
+          }
+          const keep = new Set(latestByPair.values())
+          for (const stream of streams) {
+            if (!keep.has(stream)) dirtyDepthStreams.delete(stream)
+          }
+          streams = [...keep]
+        }
         const { selectedStreams, pairsServed, nextRoundRobin } =
           selectDepthStreamsForFlush(streams, {
             getPairForStream: (stream) =>
@@ -305,7 +346,8 @@ export function useBinanceMarket(
         })
       }
 
-      if (import.meta.env.DEV) {
+      if (import.meta.env.DEV && now - lastIngestMetricsUiAtRef.current >= 1000) {
+        lastIngestMetricsUiAtRef.current = now
         setIngestMetrics((prev) => ({
           lastWsMsgsInFlush: wsIn,
           lastTradeBufferLen: tradeBufferLen,
@@ -361,6 +403,12 @@ export function useBinanceMarket(
 
     /** Cancel scheduled RAF and run flush now (bounded backlog — see PENDING_* constants). */
     const runFlushNow = () => {
+      const now = performance.now()
+      if (now - lastCatchupFlushAtRef.current < CATCHUP_FLUSH_MIN_MS) {
+        scheduleFlush()
+        return
+      }
+      lastCatchupFlushAtRef.current = now
       if (scheduledRef.current && rafRef.current !== null) {
         cancelAnimationFrame(rafRef.current)
       }

@@ -6,6 +6,12 @@ export const MAX_TRADES = 600
  */
 export const PENDING_TRADES_FLUSH_NOW = 320
 export const PENDING_KLINES_FLUSH_NOW = 64
+/** When rAF gap > RAF_GAP_SHED_MS, hard-cap pending trades merged this flush. */
+export const PENDING_TRADES_SHED_HARD_CAP = 800
+/** Tab busy / background: shed intermediate depth + coalesce klines. */
+export const RAF_GAP_SHED_MS = 500
+/** Catch-up flush (runFlushNow) at most once per this interval. */
+export const CATCHUP_FLUSH_MIN_MS = 250
 /**
  * Raw WebSocket messages since last flush (includes book/depth/kline, not only trades).
  * Post-fix logs still showed wsIn 200–600+ when tradeBufferLen stayed small — flush on this too.
