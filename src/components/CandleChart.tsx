@@ -15,23 +15,13 @@ import {
 import { useInViewport } from '../hooks/useInViewport'
 import { smaClose } from '../lib/indicators/sma'
 import { RENDER_FPS, sharedRenderBudget } from '../lib/render/budget'
+import {
+  candlePrefixHash,
+  planCandleUpdate,
+} from '../lib/render/candleUpdate'
 import { DPR_CHANGED_EVENT, getCanvasDpr } from '../lib/render/canvasDpr'
 
 const SMA_PERIOD = 20
-
-/** Content signature for last candle row — avoids redundant lightweight-charts setData on reference churn. */
-function candleSnapshotSig(c: CandlestickData[]): string {
-  if (c.length === 0) return '0'
-  const x = c[c.length - 1]!
-  return `${c.length}:${Number(x.time)}:${x.open}:${x.high}:${x.low}:${x.close}`
-}
-
-/** Signature of candles[0..n) excluding the final candle — used by the update-last fast path. */
-function headSnapshotSig(c: CandlestickData[], n: number): string {
-  if (n <= 0) return '0'
-  const x = c[n - 1]!
-  return `${n}:${Number(x.time)}:${x.open}:${x.high}:${x.low}:${x.close}`
-}
 
 type Props = {
   candles: CandlestickData[]
@@ -62,7 +52,9 @@ export function CandleChart({
   const didFitRef = useRef(false)
   const lastChartSigRef = useRef<string>('')
   const prevCandlesLenRef = useRef(0)
-  const prevSigRef = useRef<string>('')
+  const prevHeadHashRef = useRef(0)
+  const prevFullHashRef = useRef(0)
+  const prevLastTimeRef = useRef(Number.NaN)
   const prevSmaActiveRef = useRef(false)
   const pendingRef = useRef({ candles, showSma })
   pendingRef.current = { candles, showSma }
@@ -144,7 +136,9 @@ export function CandleChart({
       chartRef.current = null
       lastChartSigRef.current = ''
       prevCandlesLenRef.current = 0
-      prevSigRef.current = ''
+      prevHeadHashRef.current = 0
+      prevFullHashRef.current = 0
+      prevLastTimeRef.current = Number.NaN
       prevSmaActiveRef.current = false
       chart.remove()
     }
@@ -158,27 +152,24 @@ export function CandleChart({
       if (!series) return
 
       const { candles: nextCandles, showSma: nextShowSma } = pendingRef.current
-      const cSig = candleSnapshotSig(nextCandles)
-      const fullSig = `${cSig}|${nextShowSma ? 1 : 0}`
+      const fullHash = candlePrefixHash(nextCandles, nextCandles.length)
+      const fullSig = `${fullHash}:${nextCandles.length}|${nextShowSma ? 1 : 0}`
       if (fullSig === lastChartSigRef.current) return
       lastChartSigRef.current = fullSig
 
       const prevLen = prevCandlesLenRef.current
       const last = nextCandles[nextCandles.length - 1]
-      const prevSig = prevSigRef.current
-      const baseSig =
-        nextCandles.length === prevLen
-          ? prevSig
-          : nextCandles.length === prevLen + 1
-            ? prevSig
-            : null
-      const canFastUpdate =
-        baseSig !== null &&
-        nextCandles.length >= 2 &&
-        headSnapshotSig(nextCandles, nextCandles.length - 1) === baseSig &&
-        last !== undefined
+      const plan = planCandleUpdate(
+        {
+          prevLen,
+          prevHeadHash: prevHeadHashRef.current,
+          prevFullHash: prevFullHashRef.current,
+          prevLastTime: prevLastTimeRef.current,
+        },
+        nextCandles,
+      )
 
-      if (canFastUpdate && last !== undefined) {
+      if (plan === 'update-last' && last !== undefined) {
         series.update(last)
       } else {
         series.setData(nextCandles)
@@ -192,7 +183,13 @@ export function CandleChart({
       }
 
       prevCandlesLenRef.current = nextCandles.length
-      prevSigRef.current = headSnapshotSig(nextCandles, nextCandles.length - 1)
+      prevHeadHashRef.current = candlePrefixHash(
+        nextCandles,
+        nextCandles.length - 1,
+      )
+      prevFullHashRef.current = fullHash
+      prevLastTimeRef.current =
+        nextCandles.length > 0 ? Number(last!.time) : Number.NaN
 
       if (smaSeries) {
         if (!nextShowSma || nextCandles.length < SMA_PERIOD) {
