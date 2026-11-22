@@ -59,6 +59,12 @@ export function useBinanceMarket(
   const fanoutWsUrl = import.meta.env.VITE_FANOUT_WS_URL ?? FANOUT_WS_DEFAULT
   const useFanout = MARKET_SOURCE === 'backend-fanout'
   const streamsKey = streams.join(',')
+  // Latest streams by ref: the effect must re-subscribe when stream *content*
+  // changes (streamsKey), not when the caller passes a new array with the same
+  // contents. Keeping `streams` in the dep list defeated `streamsKey` entirely —
+  // any parent handing down a fresh array tore the socket down and reconnected.
+  const streamsRef = useRef(streams)
+  streamsRef.current = streams
 
   const [connection, setConnection] = useState<ConnectionState>('idle')
   const [trades, setTrades] = useState<NormalizedTrade[]>([])
@@ -131,7 +137,7 @@ export function useBinanceMarket(
   const lastDepthPublishedAtByStreamRef = useRef(new Map<string, number>())
 
   useEffect(() => {
-    const streamsSnapshot = [...streams]
+    const streamsSnapshot = [...streamsRef.current]
     pendingTradesRef.current = []
     bookBySymbolRef.current = new Map()
     dirtyBookSymbolsRef.current = new Set()
@@ -708,7 +714,7 @@ export function useBinanceMarket(
       }
       ws = null
     }
-  }, [fanoutWsUrl, host, omitKlineState, streams, streamsKey, useFanout])
+  }, [fanoutWsUrl, host, omitKlineState, streamsKey, useFanout])
 
   return {
     connection,
