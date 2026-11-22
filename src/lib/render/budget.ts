@@ -20,6 +20,8 @@ type PanelSlot = {
   dirty: boolean
   /** Timestamp of last paint; null = never painted (interval gate waived for the first paint). */
   lastPaint: number | null
+  /** Set once a paint throws, so a broken panel logs once instead of every frame. */
+  failureLogged: boolean
 }
 
 export type RenderBudget = {
@@ -68,11 +70,30 @@ export function createRenderBudget(deps: Partial<RenderBudgetDeps> = {}): Render
     prunePaintWindow(now)
     for (const slot of panels.values()) {
       if (!slot.dirty) continue
-      if (slot.isVisible && !slot.isVisible()) continue
+      try {
+        if (slot.isVisible && !slot.isVisible()) continue
+      } catch {
+        // A broken visibility predicate must not stall the panel set.
+        continue
+      }
       if (slot.lastPaint !== null && now - slot.lastPaint < slot.intervalMs) continue
       slot.dirty = false
       slot.lastPaint = now
-      slot.paint(now)
+      try {
+        slot.paint(now)
+      } catch (err) {
+        // One throwing panel must never take the shared loop down with it: an
+        // uncaught throw here previously escaped `loop`, so `raf(loop)` was never
+        // re-scheduled while `looping` stayed true, freezing every panel for the
+        // rest of the session. Log once per registration and keep going.
+        if (!slot.failureLogged) {
+          slot.failureLogged = true
+          if (typeof console !== 'undefined') {
+            console.error('[renderBudget] paint failed', err)
+          }
+        }
+        continue
+      }
       paintTimestamps.push(now)
     }
     prunePaintWindow(now)
@@ -80,11 +101,16 @@ export function createRenderBudget(deps: Partial<RenderBudgetDeps> = {}): Render
 
   const loop = (now: number) => {
     rafId = null
-    tick(now)
-    if (looping && panels.size > 0) {
-      rafId = raf(loop)
-    } else {
-      looping = false
+    try {
+      tick(now)
+    } finally {
+      // Re-schedule unconditionally so an exception from tick can never leave the
+      // budget in the `looping === true` with-no-rAF state that ensureLoop cannot escape.
+      if (looping && panels.size > 0) {
+        rafId = raf(loop)
+      } else {
+        looping = false
+      }
     }
   }
 
@@ -104,6 +130,7 @@ export function createRenderBudget(deps: Partial<RenderBudgetDeps> = {}): Render
       isVisible: opts.isVisible,
       dirty: false,
       lastPaint: null,
+      failureLogged: false,
     })
     ensureLoop()
     return () => {
